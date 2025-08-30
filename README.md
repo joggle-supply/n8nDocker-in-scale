@@ -620,8 +620,12 @@ docker exec n8ndocker-in-scale-redis-1 redis-cli FLUSHALL
 
 ```bash
 # Initial setup
-git clone <repository>
+git clone https://github.com/joggle-supply/n8nDocker-in-scale.git
 cd n8nDocker-in-scale
+
+# Copy and configure environment
+cp .env.example .env
+# Edit .env with your actual values (encryption key, passwords, etc.)
 
 # Start with default 2 workers
 docker-compose up -d
@@ -637,6 +641,201 @@ docker-compose up -d --scale n8n-worker=5
 
 # Access UI
 open http://localhost:5678
+```
+
+## Scaling Demonstration - Complete POC Guide
+
+This section provides step-by-step commands to demonstrate horizontal scaling capabilities using the email workflow.
+
+### **Phase 1: Initial Setup (2 Workers)**
+
+```bash
+# 1. Start with baseline setup
+docker-compose up -d
+docker ps | grep n8n-worker  # Should show 2 workers
+
+# 2. Import the test workflow
+cd scripts
+./insert-workflow.sh ../workflows/email-workflow.json
+
+# 3. Check initial status
+./monitor-workers.sh
+# Should show: 0 recent executions, 2 active workers
+
+# 4. Access n8n UI
+open http://localhost:5678
+# Complete setup wizard if first time
+```
+
+### **Phase 2: Baseline Performance Testing**
+
+```bash
+# 1. Execute workflow manually 5 times in n8n UI
+# Go to: http://localhost:5678 → Find "Email Test Hardcoded" workflow → Execute 5 times
+
+# 2. Monitor results after each execution
+./monitor-workers.sh
+# Should show increasing execution count: 1, 2, 3, 4, 5
+
+# 3. Verify email delivery (check spam folder)
+# Each execution should send an email
+
+# 4. Record baseline timing
+echo "Baseline: 2 workers, 5 executions completed"
+```
+
+### **Phase 3: Scale Up Demonstration (5 Workers)**
+
+```bash
+# 1. Scale to 5 workers
+docker-compose up -d --scale n8n-worker=5
+
+# 2. Verify worker count
+docker ps | grep n8n-worker | wc -l  # Should output: 5
+
+# 3. Check worker status
+./monitor-workers.sh
+# Should show: 5 active workers
+
+# 4. Execute workflow 10 times rapidly
+# In n8n UI, execute the workflow 10 times as quickly as possible
+
+# 5. Monitor load distribution
+./monitor-workers.sh
+# Should show: 15 total executions (5 previous + 10 new)
+
+# 6. Observe improved performance
+echo "Scale test: 5 workers handling 10 concurrent executions"
+```
+
+### **Phase 4: Heavy Load Testing (10 Workers)**
+
+```bash
+# 1. Scale to 10 workers for heavy load
+docker-compose up -d --scale n8n-worker=10
+
+# 2. Verify scaling
+docker ps --filter "name=n8n-worker" --format "table {{.Names}}\t{{.Status}}"
+# Should show 10 workers all "Up"
+
+# 3. Check Redis queue capacity
+docker exec n8ndocker-in-scale-redis-1 redis-cli INFO keyspace
+
+# 4. Execute workflow 20 times rapidly
+# In n8n UI: Execute → Execute → Execute... (20 times as fast as possible)
+
+# 5. Monitor real-time processing
+watch -n 2 './monitor-workers.sh'
+# Watch executions increment in real-time
+
+# 6. Check system resources
+docker stats --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}"
+```
+
+### **Phase 5: Scale Down Demonstration**
+
+```bash
+# 1. Scale down to 3 workers (graceful)
+docker-compose up -d --scale n8n-worker=3
+
+# 2. Verify graceful shutdown
+docker ps -a | grep n8n-worker
+# Should show 3 running, others cleanly stopped
+
+# 3. Test continued functionality
+# Execute workflow 5 more times in UI
+
+# 4. Verify no data loss
+./monitor-workers.sh
+# Should show all previous + new executions
+
+# 5. Final system status
+echo "Scale down successful: 3 workers still processing workflows"
+```
+
+### **Phase 6: Performance Validation Commands**
+
+```bash
+# Real-time monitoring during scaling tests
+# Run these in separate terminals:
+
+# Terminal 1: Watch worker count
+watch -n 1 'docker ps --filter "name=n8n-worker" --quiet | wc -l'
+
+# Terminal 2: Monitor execution count  
+watch -n 2 'cd scripts && ./monitor-workers.sh'
+
+# Terminal 3: Watch Redis queue
+watch -n 1 'docker exec n8ndocker-in-scale-redis-1 redis-cli LLEN bull:jobs:waiting'
+
+# Terminal 4: Monitor system resources
+watch -n 2 'docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}"'
+```
+
+### **Expected Results Summary**
+
+| Phase | Workers | Executions | Expected Behavior |
+|-------|---------|------------|------------------|
+| Baseline | 2 | 5 | Sequential processing, ~2-3 sec/workflow |
+| Scale Up | 5 | 10 | Parallel processing, ~1-2 sec/workflow |
+| Heavy Load | 10 | 20 | High concurrency, <1 sec/workflow |
+| Scale Down | 3 | 5 | Continued processing, graceful shutdown |
+
+### **Verification Checklist**
+
+- [ ] **Worker Count**: `docker ps | grep n8n-worker | wc -l` shows correct number
+- [ ] **All Executions Successful**: Monitor shows all executions with ✅ status
+- [ ] **Email Delivery**: Check inbox/spam for email confirmations
+- [ ] **No Job Loss**: Execution count increases monotonically
+- [ ] **Graceful Scaling**: No errors during scale up/down operations
+- [ ] **Resource Efficiency**: CPU/memory usage scales proportionally
+
+### **Troubleshooting Scaling Issues**
+
+```bash
+# If workers not appearing:
+docker-compose logs n8n-worker-1 --tail=20
+
+# If executions failing:
+./monitor-workers.sh
+docker exec n8ndocker-in-scale-postgres-1 psql -U n8n -d n8n -c "
+SELECT id, status, \"startedAt\" FROM execution_entity ORDER BY \"startedAt\" DESC LIMIT 5;"
+
+# If Redis connectivity issues:
+docker exec n8ndocker-in-scale-n8n-worker-1 sh -c "nc -zv redis 6379"
+
+# If database connectivity issues:
+docker exec n8ndocker-in-scale-n8n-main-1 sh -c "pg_isready -h postgres -p 5432 -U n8n"
+```
+
+### **Demo Script for Presentations**
+
+```bash
+#!/bin/bash
+# demo-scaling.sh - Complete scaling demonstration
+
+echo "🚀 n8n Horizontal Scaling Demonstration"
+echo "======================================"
+
+# Phase 1: Setup
+echo "📋 Phase 1: Initial Setup"
+docker-compose up -d
+sleep 10
+echo "✅ Started with $(docker ps | grep n8n-worker | wc -l) workers"
+
+# Phase 2: Scale up
+echo "📋 Phase 2: Scaling to 10 workers"
+docker-compose up -d --scale n8n-worker=10
+sleep 5
+echo "✅ Scaled to $(docker ps | grep n8n-worker | wc -l) workers"
+
+# Phase 3: Show status
+echo "📋 Phase 3: System Status"
+cd scripts && ./monitor-workers.sh
+
+echo ""
+echo "🎯 Demo complete! Execute workflows in UI at http://localhost:5678"
+echo "💡 Run './monitor-workers.sh' to see real-time execution distribution"
 ```
 
 ## Files Structure
