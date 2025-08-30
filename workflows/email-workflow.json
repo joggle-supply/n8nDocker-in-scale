@@ -1,0 +1,54 @@
+{
+  "name": "Email Test Hardcoded",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "start",
+      "name": "Start",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.resend.com/emails",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer re_gYh5SHgw_AGwize4FSqQipZf5HhwknGaJ"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "{\n  \"from\": \"n8n@engine.joggle.link\",\n  \"to\": [\"parasupillai@gmail.com\"],\n  \"subject\": \"n8n Worker Distribution Test\",\n  \"html\": \"<h2>🚀 n8n Queue Mode Scalability Test</h2><p><strong>✅ Processed successfully!</strong></p><p><strong>📊 Test Purpose:</strong> Verify n8n email functionality with hardcoded values</p><p><strong>🔧 Configuration:</strong> Testing basic email functionality</p>\",\n  \"text\": \"n8n Worker Distribution Test - Testing basic functionality with hardcoded values.\"\n}"
+      },
+      "id": "email",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [460, 300]
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
