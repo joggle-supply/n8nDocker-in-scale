@@ -211,6 +211,208 @@ docker ps --filter "name=n8n-worker" --format "table {{.Names}}\t{{.Status}}"
 - **Data Consistency**: Foreign key constraints ensure referential integrity
 - **Performance**: Indexed queries on workflowId and execution timestamps
 
+### **n8n Database Initialization Behavior**
+
+Understanding how n8n handles database creation and existing databases:
+
+#### **Scenario 1: Fresh Database (First Time)**
+```bash
+# When PostgreSQL database is empty
+docker-compose up -d
+
+# n8n automatically:
+# 1. Connects to PostgreSQL
+# 2. Checks for existing n8n tables
+# 3. Runs all migration files to create schema
+# 4. Creates initial user tables, workflow tables, etc.
+```
+
+**Migration Process:**
+```sql
+-- n8n runs these migrations automatically:
+CREATE TABLE workflow_entity (
+    id varchar PRIMARY KEY,
+    name varchar NOT NULL,
+    active boolean DEFAULT false,
+    nodes text,
+    connections text,
+    settings text,
+    createdAt timestamp DEFAULT CURRENT_TIMESTAMP,
+    updatedAt timestamp DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE execution_entity (
+    id varchar PRIMARY KEY,
+    "workflowId" varchar REFERENCES workflow_entity(id),
+    mode varchar,
+    "startedAt" timestamp,
+    "stoppedAt" timestamp,
+    status varchar,
+    data text
+);
+
+CREATE TABLE user (
+    id varchar PRIMARY KEY,
+    email varchar UNIQUE,
+    "firstName" varchar,
+    "lastName" varchar,
+    password varchar,
+    settings text
+);
+
+-- And 50+ other tables...
+```
+
+#### **Scenario 2: Existing Database with n8n Tables**
+```bash
+# When database already has n8n schema
+docker-compose up -d
+
+# n8n logic:
+if (database_exists && has_n8n_tables) {
+    console.log("Using existing n8n database");
+    // Skip migration, connect directly
+    // Validate schema version
+    // Apply any pending migrations if version mismatch
+}
+```
+
+#### **Scenario 3: Existing Database, No n8n Tables**
+```bash
+# PostgreSQL database exists but empty of n8n tables
+docker-compose up -d
+
+# n8n behavior:
+# 1. Detects existing database
+# 2. No n8n tables found
+# 3. Runs full migration suite
+# 4. Creates all tables in existing database
+```
+
+#### **Scenario 4: Version Mismatch (Upgrade)**
+```bash
+# Existing n8n database with older schema version
+docker-compose up -d
+
+# n8n upgrade process:
+# 1. Checks current schema version in 'migrations' table
+# 2. Compares with required version
+# 3. Runs incremental migrations to upgrade
+# 4. Updates version tracking
+```
+
+**Example Migration Log:**
+```
+Starting migration InitialMigration1588102412422
+Finished migration InitialMigration1588102412422
+Starting migration WebhookModel1592445003908
+Finished migration WebhookModel1592445003908
+Starting migration CreateIndexStoppedAt1594825041918
+Finished migration CreateIndexStoppedAt1594825041918
+...
+Database migrations completed successfully
+```
+
+#### **Edge Cases and Handling**
+
+**Case 1: Corrupted Database**
+```bash
+# If database is corrupted or partially migrated
+# n8n will attempt to continue from last successful migration
+# Check logs for:
+ERROR: relation "workflow_entity" does not exist
+# Solution: Drop database and restart for clean migration
+```
+
+**Case 2: Permission Issues**
+```bash
+# If PostgreSQL user lacks CREATE permissions
+ERROR: permission denied to create table "workflow_entity"
+# Solution: Ensure POSTGRES_USER has full database permissions
+```
+
+**Case 3: Concurrent Initialization**
+```bash
+# Multiple n8n instances starting simultaneously
+# n8n uses database locks to prevent concurrent migrations
+# Only first instance runs migrations, others wait
+```
+
+**Case 4: Manual Database Modification**
+```bash
+# If someone manually modifies n8n tables
+# n8n may fail to start due to schema validation
+# Check logs for schema mismatch errors
+# Solution: Restore from backup or reset database
+```
+
+#### **Database Reset Commands**
+
+```bash
+# Complete database reset (DESTRUCTIVE)
+docker-compose down
+docker volume rm n8ndocker-in-scale_postgres-data
+docker-compose up -d
+# n8n will recreate entire schema
+
+# Partial reset (keep volume, clear tables)
+docker exec n8ndocker-in-scale-postgres-1 psql -U n8n -d n8n -c "
+DROP SCHEMA public CASCADE;
+CREATE SCHEMA public;"
+docker-compose restart n8n-main
+# n8n will recreate tables in existing database
+
+# Check migration status
+docker exec n8ndocker-in-scale-postgres-1 psql -U n8n -d n8n -c "
+SELECT * FROM migrations ORDER BY timestamp DESC LIMIT 5;"
+```
+
+#### **Migration Verification Commands**
+
+```bash
+# Check if n8n tables exist
+docker exec n8ndocker-in-scale-postgres-1 psql -U n8n -d n8n -c "\dt" | grep -E "(workflow|execution|user)"
+
+# Verify table schemas
+docker exec n8ndocker-in-scale-postgres-1 psql -U n8n -d n8n -c "
+\d workflow_entity
+\d execution_entity"
+
+# Check migration history
+docker exec n8ndocker-in-scale-postgres-1 psql -U n8n -d n8n -c "
+SELECT name, timestamp FROM migrations ORDER BY timestamp DESC;"
+
+# Verify data integrity
+docker exec n8ndocker-in-scale-postgres-1 psql -U n8n -d n8n -c "
+SELECT 
+    (SELECT COUNT(*) FROM workflow_entity) as workflows,
+    (SELECT COUNT(*) FROM execution_entity) as executions,
+    (SELECT COUNT(*) FROM \"user\") as users;"
+```
+
+#### **Best Practices for Database Management**
+
+1. **Backup Before Upgrades**
+```bash
+# Always backup before n8n version upgrades
+docker exec n8ndocker-in-scale-postgres-1 pg_dump -U n8n -d n8n > n8n-backup-$(date +%Y%m%d).sql
+```
+
+2. **Monitor Migration Logs**
+```bash
+# Watch for migration errors during startup
+docker logs -f n8ndocker-in-scale-n8n-main-1 | grep -i migration
+```
+
+3. **Database Health Checks**
+```bash
+# Regular database integrity checks
+docker exec n8ndocker-in-scale-postgres-1 psql -U n8n -d n8n -c "
+SELECT schemaname, tablename, attname, n_distinct 
+FROM pg_stats 
+WHERE tablename IN ('workflow_entity', 'execution_entity');"
+```
+
 #### Data Flow Example
 ```sql
 -- 1. Main instance creates execution record
